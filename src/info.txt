@@ -1,0 +1,15 @@
+C:\Users\Milan\Projekty\Dron\
+ ├─ src\
+ │   ├─ __init__.py
+ │   ├─ main.py            ← hlavní vstup projektu
+ │   ├─ cameras.py         ← práce s kamerami
+ │   ├─ tracker.py        ← logika trackování
+ │   ├─ logger.py          ← logování do CSV
+ │   ├─ gimbal.py          ← řízení gimbalu
+ │   └─ legacy\            ← starý kód pro zpětnou kompatibilitu
+ │       └─ track_drone23.py
+ ├─ tests\
+ │   ├─ test_legacy.py
+ │   ├─ test_logger.py
+ │   └─ test_gimbal.py
+ └─ venv\

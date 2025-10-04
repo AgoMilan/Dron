@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual env
+venv/
+
+# VSCode / IDE
+.vscode/
+.idea/
+
+# Výstupy
+runs/
+*.mp4
+*.csv
+
+# pytest cache
+.pytest_cache/

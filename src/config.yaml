@@ -1,0 +1,28 @@
+# ============================
+# Drone Tracker Configuration
+# ============================
+
+# Zdroj videa (soubor nebo index kamery)
+source: test_videos/drone1.mp4
+
+# Výstupy
+output: runs/out.mp4
+model: yolov8n.pt
+conf: 0.35
+imgsz: 640
+device: cpu
+
+# Zobrazení
+show: true        # otevřít okno s výsledkem
+winsize: 640      # velikost okna
+pause_frame: 20   # pauza na daném framu (None = bez pauzy)
+
+# DeepSORT nastavení
+max_age: 60
+n_init: 3
+iou_dist: 0.7
+max_cosine_distance: 0.2
+nn_budget: null
+embedder: mobilenet
+half: false
+bgr: false
