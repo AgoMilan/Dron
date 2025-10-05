@@ -1,168 +1,183 @@
 # -*- coding: utf-8 -*-
 """
-yolo_deepsort_tracker.py
-Pokročilý tracking: YOLO detektor + DeepSORT
-Autor: generováno ChatGPT (Milan project)
+Created on Sun Oct  5 12:22:53 2025
 
-Požadavky (pip):
-  pip install ultralytics opencv-python-headless deep-sort-realtime numpy pandas tqdm
-
-Poznámky:
-- Skript detekuje objekty pomocí YOLO (ultralytics) a následně je sleduje pomocí DeepSORT.
-- Hledá objekty kategorií 'bird', 'drone' a obecně 'person' pokud chcete testovat.
-- Pokud nemáte GPU, použijte --device cpu.
-- Skript ukládá výstupní video a CSV log s tracky.
+@author: Milan
 """
 
-import argparse
-import os
-import time
-from collections import defaultdict
+# -*- coding: utf-8 -*-
+"""
+YOLOv8 + DeepSORT sledování s ručním výběrem cíle, parametry převzaté z track_drone23.py
+Autor: Milan + GPT-5
+"""
+
+"""
+YOLO + DeepSORT tracker s pauzou pro výběr objektu a možností zmenšení bounding boxu (--shrink).
+"""
 
 import cv2
+import torch
+import os
+import csv
+import time
 import numpy as np
-import pandas as pd
-from ultralytics import YOLO  # ultralytics (YOLOv8)            
-from deep_sort_realtime.deepsort_tracker import DeepSort  # deep-sort-realtime
+from ultralytics import YOLO
+from deep_sort_realtime.deepsort_tracker import DeepSort
 
-def xyxy_to_xywh(box):
-    x1, y1, x2, y2 = box
-    w = x2 - x1
-    h = y2 - y1
-    cx = x1 + w/2
-    cy = y1 + h/2
-    return (int(cx), int(cy), int(w), int(h))
-
-def init_video_writer(path, fourcc, fps, size):
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    return cv2.VideoWriter(path, fourcc, fps, size)
 
 def main(args):
-    # Load model
-    print("Loading YOLO model:", args.model)
-    model = YOLO(args.model)  # supports 'yolov8n.pt' or 'yolov8n' (auto)
-    # device selection via model.predict args below (ultralytics uses auto if not specified)
+    print(f"Načítám model: {args.model}")
+    model = YOLO(args.model)
 
-    # Initialize DeepSort
     print("Inicializuji DeepSort...")
-    tracker = DeepSort(max_age=args.max_age,  # frames to keep unmatched tracks
-                       n_init=args.n_init,     # frames to confirm track
-                       max_cosine_distance=0.2,
-                       nn_budget=100,
-                       embedder="mobilenet")   # embedder name supported by package
+    tracker = DeepSort(
+        max_age=args.max_age,
+        n_init=args.n_init,
+        max_iou_distance=args.iou_dist,
+    )
 
-    # Open source
     cap = cv2.VideoCapture(args.source)
-    if not cap.isOpened():
-        raise RuntimeError("Nelze otevřít zdroj: " + str(args.source))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    print(f"Zdroj: {args.source}  {height}x{width} @ {fps:.2f}fps")
 
-    fps = cap.get(cv2.CAP_PROP_FPS) or args.fps or 25.0
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    print(f"Zdroj: {args.source}  {w}x{h} @ {fps}fps")
+    # Výstupní video
+    os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
+    out = cv2.VideoWriter(
+        args.output,
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        fps,
+        (width, height),
+    )
 
-    out = None
-    if args.output:
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        out = init_video_writer(args.output, fourcc, fps, (w, h))
+    csv_path = os.path.splitext(args.output)[0] + ".csv"
+    csv_file = open(csv_path, "w", newline="")
+    csv_writer = csv.writer(csv_file)
+    csv_writer.writerow(["frame", "track_id", "x1", "y1", "x2", "y2", "confidence", "class"])
 
-    # CSV logger
-    logs = []
-    header = ["frame", "time", "track_id", "class", "conf", "x1", "y1", "x2", "y2", "cx", "cy", "w", "h"]
-
+    selected_id = None
     frame_idx = 0
+    shrink = getattr(args, "shrink", 0.0)
     start_time = time.time()
+
+    scale = args.winsize / width
+    print(f"Škála: {scale:.4f} -> zobrazím {args.winsize}x{int(height * scale)}")
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
         frame_idx += 1
-        # optionally resize for speed
-        if args.winsize and frame.shape[1] > args.winsize:
-            scale = args.winsize / frame.shape[1]
-            frame = cv2.resize(frame, (int(frame.shape[1]*scale), int(frame.shape[0]*scale)))
-        # Run detection every N frames (args.step)
-        dets = []
-        if frame_idx % args.step == 0:
-            results = model.predict(frame, imgsz=args.imgsz, conf=args.conf, device=args.device, verbose=False)
-            # ultralytics returns list of results (one per image)
-            if len(results) > 0:
-                r = results[0]
-                boxes = getattr(r, "boxes", [])
-                for box in boxes:
-                    # each box: .xyxy .conf .cls
-                    xyxy = box.xyxy.cpu().numpy()[0] if hasattr(box.xyxy, "cpu") else np.array(box.xyxy[0])
-                    x1,y1,x2,y2 = map(int, xyxy.tolist())
-                    conf = float(box.conf.cpu().numpy()[0]) if hasattr(box.conf, "cpu") else float(box.conf)
-                    cls = int(box.cls.cpu().numpy()[0]) if hasattr(box.cls, "cpu") else int(box.cls)
-                    class_name = model.names.get(cls, str(cls))
-                    if args.classes and class_name not in args.classes:
-                        continue
-                    dets.append(([x1,y1,x2,y2], conf, class_name))
 
-        # Update tracker with detections
-        tracks = tracker.update_tracks(dets, frame=frame)  # list of Track objects
-        # tracks: has .track_id, .to_tlbr(), .det_conf, .get_det_class()
+        # YOLO inference
+        results = model.predict(frame, conf=getattr(args, "yolo_conf", getattr(args, "conf", 0.25)),
+                        imgsz=getattr(args, "imgsz", 640), verbose=False)
+
+        detections = []
+        for r in results:
+            for box in r.boxes:
+                x1, y1, x2, y2 = box.xyxy[0]
+                conf = float(box.conf[0])
+                cls = int(box.cls[0])
+                detections.append(([x1, y1, x2 - x1, y2 - y1], conf, cls))
+
+        # Update tracker
+        tracks = tracker.update_tracks(detections, frame=frame)
+        vis = frame.copy()
+
+        # --- Kreslení boxů ---
         for tr in tracks:
             if not tr.is_confirmed():
                 continue
-            tid = tr.track_id
-            tlbr = tr.to_tlbr()  # left, top, right, bottom
-            x1, y1, x2, y2 = map(int, tlbr)
-            w_box = x2 - x1
-            h_box = y2 - y1
-            cx = x1 + w_box//2
-            cy = y1 + h_box//2
-            cls = getattr(tr, "det_class", "") or tr.get_det_class() if hasattr(tr, "get_det_class") else ""
-            conf = getattr(tr, "det_conf", 0.0)
-            # draw
-            label = f"ID:{tid} {cls} {conf:.2f}"
-            cv2.rectangle(frame, (x1,y1), (x2,y2), (0,255,0), 2)
-            cv2.putText(frame, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
-            # log
-            logs.append([frame_idx, time.time()-start_time, tid, cls, conf, x1, y1, x2, y2, cx, cy, w_box, h_box])
+            try:
+                l, t, r, b = tr.to_ltrb()
+                w, h = r - l, b - t
+                cx, cy = l + w / 2, t + h / 2
 
-        # If no tracks, optionally mark "No targets"
-        if args.display and len(tracks) == 0:
-            cv2.putText(frame, "No tracks", (20,30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2)
+                # Shrink kolem středu
+                new_w = w * (1 - shrink)
+                new_h = h * (1 - shrink)
+                l = int(cx - new_w / 2)
+                r = int(cx + new_w / 2)
+                t = int(cy - new_h / 2)
+                b = int(cy + new_h / 2)
 
-        # Write output
-        if out is not None:
-            out.write(frame)
-        if args.display:
-            cv2.imshow("YOLO + DeepSORT", frame)
-            if cv2.waitKey(1) & 0xFF == 27:
+                color = (0, 255, 0) if tr.track_id != selected_id else (0, 0, 255)
+                cv2.rectangle(vis, (l, t), (r, b), color, 2)
+                cv2.putText(vis, f"ID:{tr.track_id}", (l, max(12, t - 6)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+                csv_writer.writerow([frame_idx, tr.track_id, l, t, r, b,
+                                     getattr(tr, "confidence", 0.0), getattr(tr, "cls", -1)])
+            except Exception as e:
+                print(f"⚠️ Chyba při kreslení boxu: {e}")
+                continue
+
+        # --- Pauza pro výběr objektu ---
+        if frame_idx == args.pause_frame:
+            print(f"⏸ Pauza na framu {frame_idx} – klikni na objekt nebo stiskni [A]/[Enter]/[Space]")
+
+            paused = True
+            click_pos = []
+
+            def click_event(event, x, y, flags, param):
+                if event == cv2.EVENT_LBUTTONDOWN:
+                    click_pos.append((int(x / scale), int(y / scale)))
+                    print(f"🖱 Klik (display): ({x},{y}) → (orig): ({int(x / scale)},{int(y / scale)})")
+
+            cv2.namedWindow("YOLO DeepSORT")
+            cv2.setMouseCallback("YOLO DeepSORT", click_event)
+
+            while paused:
+                disp = cv2.resize(vis, (args.winsize, int(height * scale)))
+                cv2.imshow("YOLO DeepSORT", disp)
+                key = cv2.waitKey(50) & 0xFF
+
+                if key in [ord('q'), 27]:
+                    print("🛑 Ukončeno uživatelem (q/esc).")
+                    cap.release()
+                    out.release()
+                    csv_file.close()
+                    cv2.destroyAllWindows()
+                    return
+                elif key in [ord('a'), ord(' '), 13]:
+                    if len(tracks) > 0:
+                        selected_id = tracks[0].track_id
+                        print(f"✅ Auto-vybrán track ID {selected_id}")
+                    paused = False
+                elif click_pos:
+                    x, y = click_pos[-1]
+                    for tr in tracks:
+                        l, t, r, b = tr.to_ltrb()
+                        if l <= x <= r and t <= y <= b:
+                            selected_id = tr.track_id
+                            print(f"✅ Vybrán klikem ID {selected_id}")
+                            paused = False
+                            break
+                    click_pos.clear()
+
+        # --- Zobrazení ---
+        if args.show:
+            disp = cv2.resize(vis, (args.winsize, int(height * scale)))
+            cv2.imshow("YOLO DeepSORT", disp)
+            if cv2.waitKey(1) & 0xFF in [ord('q'), 27]:
                 break
 
-    # Save CSV
-    if args.csv:
-        os.makedirs(os.path.dirname(args.csv) or ".", exist_ok=True)
-        df = pd.DataFrame(logs, columns=header)
-        df.to_csv(args.csv, index=False)
-        print("CSV uložen:", args.csv)
+        out.write(vis)
 
+    # --- Ukončení ---
     cap.release()
-    if out is not None:
-        out.release()
+    out.release()
+    csv_file.close()
     cv2.destroyAllWindows()
-    print("Hotovo. Výstup uložen do:", args.output if args.output else "nebyl zadán")
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="YOLOv8 + DeepSORT tracker")
-    parser.add_argument("--source", type=str, default=0, help="video file or camera index")
-    parser.add_argument("--output", type=str, default="/mnt/data/runs/yolo_deepsort_out.mp4", help="výstupní video")
-    parser.add_argument("--csv", type=str, default="/mnt/data/runs/yolo_deepsort_log.csv", help="CSV log")
-    parser.add_argument("--model", type=str, default="yolov8n.pt", help="ultralytics model (yolov8n.pt) or path")
-    parser.add_argument("--conf", type=float, default=0.25, help="confidence threshold")
-    parser.add_argument("--imgsz", type=int, default=640, help="inference image size")
-    parser.add_argument("--device", type=str, default="cpu", help="cpu or cuda:0")
-    parser.add_argument("--step", type=int, default=1, help="run detection every N frames (1 => every)")
-    parser.add_argument("--winsize", type=int, default=0, help="max width to scale for speed (0 no resize)")
-    parser.add_argument("--fps", type=float, default=0, help="force fps if source has none")
-    parser.add_argument("--display", action='store_true', help="show window")
-    parser.add_argument("--classes", type=str, nargs='*', default=["bird","drone","person"], help="class names to keep")
-    parser.add_argument("--max_age", type=int, default=30, help="DeepSort max_age")
-    parser.add_argument("--n_init", type=int, default=1, help="frames to confirm track")
-    args = parser.parse_args()
-    main(args)
+    elapsed = time.time() - start_time
+    print(f"✅ Hotovo — frames: {frame_idx}, čas: {elapsed:.1f}s, FPS: {frame_idx / elapsed:.2f}")
+    print(f"📹 Video: {args.output}")
+    print(f"📄 CSV: {csv_path}")
+
+
+if __name__ == "__main__":
+    print("❌ Tento soubor není určen pro přímé spuštění. Použij main.py.")
