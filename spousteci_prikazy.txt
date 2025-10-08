@@ -10,4 +10,8 @@ Tracker základní s open_cv
 python main.py --mode opencv --source test_videos\drone1.mp4 --show --winsize 640 --tracker MOSSE
 
 verzování git
- git commit -m "Přidána třetí verze trackeru: základní OpenCV + YOLO + DeepSORT (plně funkční oba trackery spouštění přes main.py)"
+git add .
+
+git commit -m "Přidána třetí verze trackeru: základní OpenCV + YOLO + DeepSORT (plně funkční oba trackery spouštění přes main.py)"
+
+git log --oneline
