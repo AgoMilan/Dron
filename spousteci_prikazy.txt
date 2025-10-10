@@ -1,17 +1,26 @@
 cd C:\Users\Milan\Projekty\Dron
 .\venv\Scripts\activate
 
-cd src
- 
+
 tracker YOLO
+----------------------
+cd src
 python main.py --mode yolo --source test_videos/drone1.mp4 --show --pause_frame 15 --winsize 640 --model yolov8n.pt --yolo-conf 0.35 --max_age 55 --iou_dist 0.4 --n_init 3 --shrink 0.3
 
 Tracker základní s open_cv
+--------------------------
 python main.py --mode opencv --source test_videos\drone1.mp4 --show --winsize 640 --tracker MOSSE
 
 verzování git
+---------------------
 git add .
 
 git commit -m "Přidána třetí verze trackeru: základní OpenCV + YOLO + DeepSORT (plně funkční oba trackery spouštění přes main.py)"
 
 git log --oneline
+
+
+Napojení na online kameru Prodejna
+----------------------------------
+cd Dron_online
+python .\yolo_deepsort_online_vivotek_v2.py --source "rtsp://root:asd456@192.168.0.205:554/live.sdp" --display
