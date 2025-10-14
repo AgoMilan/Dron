@@ -24,3 +24,25 @@ Napojení na online kameru Prodejna
 ----------------------------------
 cd Dron_online
 python .\yolo_deepsort_online_vivotek_v2.py --source "rtsp://root:asd456@192.168.0.205:554/live.sdp" --display
+
+python yolo_deepsort_online_vivotek_v2_per.py --source rtsp://root:heslo@192.168.0.205/live.sdp --display --face_ratio 0.3
+
+Model YOLO11
+-----------
+ python yolo11_face_tracker.py --source rtsp://root:asd456@192.168.0.205:554/live.sdp --display
+
+ python yolo11_face_tracker_v8.py --source rtsp://root:asd456@192.168.0.205:554/live.sdp --display --winsize 1300 --shrink 0.5
+
+python yolo11_face_tracker_v10.py --source rtsp://root:asd456@192.168.0.205:554/live.sdp --display
+
+
+Jupiter - trénování modelu
+----------
+cd Trener
+jupyter notebook
+
+On_line kamera Canon eos77D
+---------------------------
+  python .\yolo_deepsort_eos77_v2.py --source 0 --display --winsize 900 --shrink 0.3
+
+python yolo_11deepsort_eos_v1_log.py --source 0 --model yolo11n.pt --conf 0.35 --imgsz 640 --display --winsize 900 --shrink 0.3
